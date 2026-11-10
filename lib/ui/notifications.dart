@@ -268,7 +268,9 @@ class _StaffNotificationsPageState extends State<StaffNotificationsPage> {
                     padding: const EdgeInsets.all(8),
                     child: Text(
                       'Không thể làm mới: $_error',
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
                     ),
                   ),
                 if (_notifications.isEmpty)

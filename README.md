@@ -72,6 +72,7 @@ Mặc định API base URL được chọn theo nền tảng:
 | Windows, iOS simulator, Linux, macOS, Web | `http://localhost:5225/api` |
 
 Có thể ghi đè bằng compile-time define `API_BASE_URL`. Có thể truyền URL gốc của server hoặc URL kết thúc bằng `/api`:
+Trên Android emulator, `localhost`, `127.0.0.1` và `::1` trong cấu hình sẽ được chuyển thành `10.0.2.2` để truy cập máy phát triển.
 
 ```powershell
 # Windows desktop

@@ -7,8 +7,9 @@ import 'package:flutter/material.dart';
 import '../core/api_client.dart';
 import '../core/app_state.dart';
 
-const _adminRose = Color(0xFFE11D48);
-const _adminMuted = Color(0xFF777681);
+// Admin colour palette — xanh navy/indigo, không trùng với giao diện khách hàng (hồng-đỏ)
+const _adminRose = Color(0xFF3730A3); // Indigo-800 — dùng cho text giá, icon nhấn mạnh
+const _adminMuted = Color(0xFF64748B); // Slate-500
 
 int _numberId(dynamic value) =>
     value is num ? value.toInt() : int.tryParse('$value') ?? 0;
@@ -993,14 +994,14 @@ class _ProductSummaryCard extends StatelessWidget {
                   height: 66,
                   child: image.isEmpty
                       ? const ColoredBox(
-                          color: Color(0xFFFFEFF1),
+                          color: Color(0xFFEEF2FF), // Indigo-50
                           child: Icon(Icons.toys_outlined, color: _adminRose),
                         )
                       : Image.network(
                           image,
                           fit: BoxFit.cover,
                           errorBuilder: (_, _, _) => const ColoredBox(
-                            color: Color(0xFFFFEFF1),
+                            color: Color(0xFFEEF2FF),
                             child: Icon(Icons.toys_outlined, color: _adminRose),
                           ),
                         ),
@@ -1029,16 +1030,27 @@ class _ProductSummaryCard extends StatelessWidget {
                       style: const TextStyle(color: _adminMuted, fontSize: 12),
                     ),
                     const SizedBox(height: 5),
-                    Text(
-                      _price(
-                        product['basePrice'] ??
-                            (variants.isEmpty ? 0 : variants.first['price']),
+                    // Chỉ hiện giá khi tồn kho đã được cập nhật (có hàng thực sự)
+                    if (tracked)
+                      Text(
+                        _price(
+                          product['basePrice'] ??
+                              (variants.isEmpty ? 0 : variants.first['price']),
+                        ),
+                        style: const TextStyle(
+                          color: _adminRose,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      )
+                    else
+                      const Text(
+                        'Chưa cập nhật giá',
+                        style: TextStyle(
+                          color: _adminMuted,
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                        ),
                       ),
-                      style: const TextStyle(
-                        color: _adminRose,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
                     Text(
                       tracked
                           ? 'Còn $available sản phẩm'
@@ -3221,11 +3233,12 @@ class _ProductFormPageState extends State<ProductFormPage> {
   Future<void> _uploadImage() async {
     setState(() => _uploading = true);
     try {
-      final file = await FilePicker.pickFile(type: FileType.image);
-      if (file == null) return;
-      final bytes = await file.readAsBytes();
+      final files = await FilePicker.pickFiles(type: FileType.image);
+      if (files.isEmpty) return;
+      final file = files.first;
+      final bytes = await file.xFile.readAsBytes();
       if (bytes.isEmpty) {
-        throw const ApiException('Không đọc được ảnh đã chọn.');
+        throw const ApiException('Không đọc được dữ liệu ảnh đã chọn.');
       }
       final response = _object(
         await widget.state.api.uploadImage(
@@ -3251,11 +3264,12 @@ class _ProductFormPageState extends State<ProductFormPage> {
   Future<void> _uploadVariantImage(_VariantDraft variant) async {
     setState(() => _uploading = true);
     try {
-      final file = await FilePicker.pickFile(type: FileType.image);
-      if (file == null) return;
-      final bytes = await file.readAsBytes();
+      final files = await FilePicker.pickFiles(type: FileType.image);
+      if (files.isEmpty) return;
+      final file = files.first;
+      final bytes = await file.xFile.readAsBytes();
       if (bytes.isEmpty) {
-        throw const ApiException('Không đọc được ảnh đã chọn.');
+        throw const ApiException('Không đọc được dữ liệu ảnh đã chọn.');
       }
       final response = _object(
         await widget.state.api.uploadImage(

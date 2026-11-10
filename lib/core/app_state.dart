@@ -7,22 +7,49 @@ class CartLine {
     required this.product,
     required this.variantId,
     required this.quantity,
+    this.variantName,
+    this.sku,
   });
 
   final Map<String, dynamic> product;
   final int variantId;
   int quantity;
+  final String? variantName;
+  final String? sku;
 
-  double get price {
-    final variants = product['productVariants'];
+  Map<String, dynamic>? get selectedVariant {
+    final variants =
+        product['productVariants'] ??
+        product['variants'] ??
+        product['Variants'];
     if (variants is List) {
       for (final item in variants.whereType<Map>()) {
-        if (_int(item['variantId']) == variantId) {
-          return _double(item['price'] ?? item['sellingPrice']);
+        if (_int(item['variantId'] ?? item['id'] ?? item['VariantId']) ==
+            variantId) {
+          return item is Map<String, dynamic>
+              ? item
+              : item.map((k, v) => MapEntry('$k', v));
         }
       }
     }
-    return _double(product['basePrice']);
+    return null;
+  }
+
+  int get maxStock {
+    final v = selectedVariant;
+    if (v != null) {
+      return variantAvailableStock(v) ?? 99;
+    }
+    return productAvailableStock(product) ?? 99;
+  }
+
+  double get price {
+    final v = selectedVariant;
+    if (v != null) {
+      final price = variantPrice(v);
+      if (price > 0) return price;
+    }
+    return productDisplayPrice(product);
   }
 
   double get total => price * quantity;
@@ -37,6 +64,7 @@ class AppState extends ChangeNotifier {
   String? error;
   List<Map<String, dynamic>> products = [];
   List<Map<String, dynamic>> categories = [];
+  List<Map<String, dynamic>> brands = [];
   List<Map<String, dynamic>> orders = [];
   List<CartLine> cart = [];
   Map<String, dynamic> profile = {};
@@ -57,6 +85,11 @@ class AppState extends ChangeNotifier {
   Future<void> initialize() async {
     await api.restoreSession();
     initialized = true;
+    notifyListeners();
+  }
+
+  Future<void> updateApiBaseUrl(String newUrl) async {
+    await api.updateBaseUrl(newUrl);
     notifyListeners();
   }
 
@@ -136,6 +169,7 @@ class AppState extends ChangeNotifier {
       await api.clearSession();
       products = [];
       categories = [];
+      brands = [];
       orders = [];
       cart = [];
       profile = {};
@@ -150,14 +184,14 @@ class AppState extends ChangeNotifier {
       final results = await Future.wait([
         api.get('Product'),
         api.get('Category'),
+        api.get('Brand'),
       ]);
-      products = _asMapList(results[0])
-          .where(
-            (product) =>
-                _int(product['status']) != 0 && _int(product['status']) != 3,
-          )
-          .toList();
+      products = _asMapList(results[0]).where((p) {
+        final s = (p['status'] ?? p['Status'])?.toString().toLowerCase();
+        return s != '3' && s != '5' && s != 'inactive' && s != 'deleted';
+      }).toList();
       categories = _asMapList(results[1]);
+      brands = _asMapList(results[2]);
       error = null;
     } finally {
       _setBusy(false);
@@ -193,28 +227,79 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> addToCart(Map<String, dynamic> product) async {
+  Future<void> addToCart(
+    Map<String, dynamic> product, {
+    int? variantId,
+    int quantity = 1,
+    String? variantName,
+    String? sku,
+  }) async {
     var selected = product;
-    var variants = _asMapList(selected['productVariants']);
-    if (variants.isEmpty) {
-      final detailed = await api.get('Product/${product['productId']}');
-      selected = _asMap(detailed);
-      variants = _asMapList(selected['productVariants']);
+    final id = product['productId'] ?? product['id'] ?? product['ProductId'];
+
+    var variants = _asMapList(
+      selected['productVariants'] ??
+          selected['variants'] ??
+          selected['Variants'],
+    );
+    if (variants.isEmpty && id != null) {
+      try {
+        final detailed = await api.get('Product/$id');
+        selected = _asMap(detailed);
+        variants = _asMapList(
+          selected['productVariants'] ??
+              selected['variants'] ??
+              selected['Variants'],
+        );
+      } catch (_) {}
     }
 
-    final variantId = variants.isEmpty
-        ? _int(selected['productId'])
-        : _int(variants.first['variantId']);
-    final existing = cart.where((line) => line.variantId == variantId);
+    final targetVariantId =
+        variantId ??
+        (variants.isEmpty
+            ? _int(id)
+            : _int(
+                variants.first['variantId'] ??
+                    variants.first['id'] ??
+                    variants.first['VariantId'],
+              ));
+
+    final existing = cart.where((line) => line.variantId == targetVariantId);
     if (existing.isNotEmpty) {
-      existing.first.quantity++;
+      final line = existing.first;
+      final max = line.maxStock;
+      if (max > 0 && line.quantity + quantity > max) {
+        throw ApiException(
+          'Số lượng trong giỏ (${line.quantity + quantity}) vượt quá tồn kho khả dụng ($max).',
+        );
+      }
+      line.quantity += quantity;
     } else {
-      cart.add(CartLine(product: selected, variantId: variantId, quantity: 1));
+      final newLine = CartLine(
+        product: selected,
+        variantId: targetVariantId,
+        quantity: quantity,
+        variantName: variantName,
+        sku: sku,
+      );
+      final max = newLine.maxStock;
+      if (max > 0 && quantity > max) {
+        throw ApiException(
+          'Số lượng yêu cầu ($quantity) vượt quá tồn kho khả dụng ($max).',
+        );
+      }
+      cart.add(newLine);
     }
     notifyListeners();
   }
 
   void updateCartQuantity(CartLine line, int change) {
+    if (change > 0) {
+      final max = line.maxStock;
+      if (max > 0 && line.quantity + change > max) {
+        throw ApiException('Đã đạt số lượng tồn kho tối đa ($max).');
+      }
+    }
     line.quantity += change;
     if (line.quantity <= 0) cart.remove(line);
     notifyListeners();
@@ -236,7 +321,8 @@ class AppState extends ChangeNotifier {
     if (cart.isEmpty) {
       throw const ApiException('Giỏ hàng đang trống.');
     }
-    if (_int(profile['customerId']) <= 0) {
+    if (_int(profile['customerId'] ?? profile['id'] ?? profile['CustomerId']) <=
+        0) {
       throw const ApiException(
         'Vui lòng lưu hồ sơ khách hàng trước khi đặt hàng.',
       );
@@ -276,11 +362,13 @@ class AppState extends ChangeNotifier {
   Future<dynamic> loadApiData(String path) => api.get(path);
 
   Future<dynamic> performApiAction(String method, String path, {Object? body}) {
-    switch (method) {
+    switch (method.toUpperCase()) {
       case 'POST':
         return api.post(path, body);
       case 'PUT':
         return api.put(path, body);
+      case 'PATCH':
+        return api.patch(path, body);
       case 'DELETE':
         return api.delete(path);
       default:
@@ -305,8 +393,82 @@ class AppState extends ChangeNotifier {
   }
 }
 
+int? productAvailableStock(Map<String, dynamic> product) {
+  final stock = variantAvailableStock(product);
+  if (stock != null) return stock;
+
+  final variants =
+      _field(product, 'productVariants') ?? _field(product, 'variants');
+  if (variants is! List) return null;
+
+  var total = 0;
+  var hasKnownStock = false;
+  for (final variant in variants.whereType<Map>()) {
+    final normalized = variant.map((key, value) => MapEntry('$key', value));
+    final variantStock = variantAvailableStock(normalized);
+    if (variantStock == null) continue;
+    total += variantStock;
+    hasKnownStock = true;
+  }
+  return hasKnownStock ? total : null;
+}
+
+int? variantAvailableStock(Map<String, dynamic> item) {
+  for (final key in const [
+    'availableQuantity',
+    'stockQuantity',
+    'totalStock',
+    'stock',
+    'quantity',
+  ]) {
+    final value = _field(item, key);
+    if (value is num) return value.toInt();
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      if (parsed != null) return parsed;
+    }
+  }
+  return null;
+}
+
+double productDisplayPrice(Map<String, dynamic> product) {
+  final price = _positiveAmount(
+    _field(product, 'basePrice') ?? _field(product, 'price'),
+  );
+  if (price > 0) return price;
+
+  final variants =
+      _field(product, 'productVariants') ?? _field(product, 'variants');
+  if (variants is! List) return 0;
+
+  final prices = variants
+      .whereType<Map>()
+      .map((variant) => variant.map((key, value) => MapEntry('$key', value)))
+      .map(variantPrice)
+      .where((value) => value > 0)
+      .toList();
+  if (prices.isEmpty) return 0;
+  return prices.reduce((a, b) => a < b ? a : b);
+}
+
+double variantPrice(Map<String, dynamic> variant) => _positiveAmount(
+  _field(variant, 'price') ?? _field(variant, 'sellingPrice'),
+);
+
+double _positiveAmount(dynamic value) {
+  final amount = value is num
+      ? value.toDouble()
+      : double.tryParse('$value') ?? 0;
+  return amount > 0 ? amount : 0;
+}
+
+dynamic _field(Map<String, dynamic> map, String key) {
+  final normalizedKey = key.toLowerCase();
+  for (final entry in map.entries) {
+    if (entry.key.toLowerCase() == normalizedKey) return entry.value;
+  }
+  return null;
+}
+
 int _int(dynamic value) =>
     value is num ? value.toInt() : int.tryParse('$value') ?? 0;
-
-double _double(dynamic value) =>
-    value is num ? value.toDouble() : double.tryParse('$value') ?? 0;
